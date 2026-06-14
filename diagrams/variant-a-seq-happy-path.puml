@@ -1,0 +1,43 @@
+@startuml variant_a_seq_happy
+title Variant A — Happy Path (push delivered, failover не нужен)
+autonumber
+
+actor "Payment Service" as PS
+participant "Notification Gateway" as GW
+participant "Redis" as R
+participant "Delivery Orchestrator" as OR
+database "PostgreSQL" as DB
+queue "Kafka" as K
+participant "Push Adapter" as PA
+participant "FCM/APNs" as FCM
+participant "Callback Ingress" as CB
+
+PS -> GW : POST /v1/notifications\n{type: transactional, event_id, user_id, template_id}
+GW -> R : EXISTS idempotency:{event_id}
+R --> GW : false
+GW -> OR : CreateDelivery(event)
+OR -> DB : INSERT delivery\nstatus=PENDING, current_channel=PUSH
+OR -> K : Publish Job{delivery_id, channel=PUSH}
+OR --> GW : delivery_id
+GW -> R : SET idempotency:{event_id} → delivery_id\nTTL 7d
+GW --> PS : 202 Accepted {delivery_id}
+
+K -> PA : Consume push job
+PA -> DB : SELECT delivery WHERE id=...\n(abort if status=DELIVERED)
+PA -> FCM : SendPush(device_token, payload)
+FCM --> PA : 200 OK {provider_msg_id}
+PA -> OR : ReportSent(delivery_id, provider_msg_id)
+OR -> DB : UPDATE attempt SET status=SENT
+
+... 1–3 сек ...
+FCM -> CB : POST /webhooks/push\n{status: DELIVERED, provider_msg_id}
+CB -> OR : OnProviderCallback(DELIVERED)
+OR -> DB : UPDATE delivery status=DELIVERED\n(composite unique on provider_msg_id)
+OR -> OR : Cancel scheduled SMS/email timeouts
+note over OR
+  Failover chain STOP.
+  SMS и email не отправляются.
+  Dedup guard: terminal state.
+end note
+
+@enduml

@@ -1,0 +1,50 @@
+@startuml variant_a_c4_container
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Variant A — Orchestrator-centric (C4 Container)
+
+Person(user, "Пользователь банка", "Получает push / SMS / email")
+Person(support, "Оператор поддержки", "Проверяет статус доставки")
+
+System_Boundary(np, "Notification Platform") {
+    Container(gateway, "Notification Gateway", "Go / gRPC", "Ingress, auth, validation, idempotency")
+    Container(orchestrator, "Delivery Orchestrator", "Go", "State machine, policy, failover, scheduler")
+    ContainerDb(state_db, "Delivery State Store", "PostgreSQL 16", "deliveries, attempts, audit events")
+    ContainerDb(redis, "Idempotency & Preferences Cache", "Redis Cluster", "event_id dedup, user prefs TTL 5m")
+    ContainerQueue(kafka, "Critical Priority Queue", "Apache Kafka", "topic: critical.notifications")
+    Container(push_ad, "Push Adapter", "Go", "FCM / APNs, circuit breaker")
+    Container(sms_ad, "SMS Adapter", "Go", "SMS gateway, rate limiter")
+    Container(email_ad, "Email Adapter", "Go", "SendGrid / SES")
+    Container(callback, "Callback Ingress", "Go", "Webhooks провайдеров")
+    Container(obs, "Observability Stack", "OTel / Prometheus / Grafana", "Traces, SLO, alerts")
+}
+
+System_Ext(payment, "Payment / Transfer Service", "Outbox после commit операции")
+System_Ext(prefs, "User Profile Service", "Настройки уведомлений")
+System_Ext(fcm, "FCM / APNs", "Push provider")
+System_Ext(sms_gw, "SMS Gateway", "Внешний SMS-провайдер")
+System_Ext(esp, "Email ESP", "Внешний email-провайдер")
+
+Rel(payment, gateway, "NotificationRequested", "gRPC / HTTPS")
+Rel(gateway, redis, "Check / set idempotency key")
+Rel(gateway, orchestrator, "CreateDelivery", "sync, ≤50ms")
+Rel(orchestrator, redis, "Read preferences cache")
+Rel(orchestrator, state_db, "Persist state & attempts")
+Rel(orchestrator, kafka, "Enqueue channel job")
+Rel(kafka, push_ad, "push jobs")
+Rel(kafka, sms_ad, "sms jobs")
+Rel(kafka, email_ad, "email jobs")
+Rel(push_ad, fcm, "SendPush")
+Rel(sms_ad, sms_gw, "SendSMS")
+Rel(email_ad, esp, "SendEmail")
+Rel(fcm, callback, "Delivery receipt webhook")
+Rel(sms_gw, callback, "DLR webhook")
+Rel(callback, orchestrator, "UpdateDeliveryStatus")
+Rel(support, gateway, "GET /deliveries/{id}", "HTTPS")
+Rel(prefs, redis, "Invalidate cache", "async")
+Rel(orchestrator, obs, "Metrics & traces")
+Rel(user, fcm, "Получает уведомление")
+
+@enduml

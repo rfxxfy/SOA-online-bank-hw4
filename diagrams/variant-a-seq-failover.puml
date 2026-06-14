@@ -1,0 +1,52 @@
+@startuml variant_a_seq_failover
+title Variant A — Failover (push fail → SMS success)
+autonumber
+
+participant "Delivery Orchestrator" as OR
+database "PostgreSQL" as DB
+queue "Kafka" as K
+participant "Push Adapter" as PA
+participant "FCM/APNs" as FCM
+participant "SMS Adapter" as SA
+participant "SMS Gateway" as SMS
+participant "Callback Ingress" as CB
+
+OR -> DB : delivery status=PENDING
+OR -> K : push job (attempt=1)
+K -> PA : consume
+PA -> FCM : SendPush()
+FCM --> PA : 503 Service Unavailable
+PA -> OR : ReportFailed(retryable=true)
+OR -> DB : attempt PUSH status=FAILED, retry_count=1
+
+alt retry within push policy
+  OR -> K : push job (attempt=2)
+  K -> PA : consume
+  PA -> FCM : SendPush()
+  FCM --> PA : timeout / no ack within 8s
+  PA -> OR : ReportFailed(timeout)
+  OR -> DB : attempt PUSH status=FAILED, retry_count=2
+end
+
+OR -> OR : EvaluatePolicy()\npush exhausted → escalate SMS
+OR -> DB : INSERT attempt channel=SMS\nstatus=ESCALATED
+OR -> K : sms job
+
+K -> SA : consume
+SA -> DB : Guard: delivery.status != DELIVERED
+SA -> SMS : SendSMS(phone, text)
+SMS --> SA : 200 {msg_ref}
+SA -> OR : ReportSent(msg_ref)
+OR -> DB : attempt SMS status=SENT
+
+SMS -> CB : DLR webhook DELIVERED
+CB -> OR : OnProviderCallback(DELIVERED, SMS)
+OR -> DB : delivery status=DELIVERED\nchannels=[PUSH×2 fail, SMS ok]
+
+note over OR
+  Email NOT sent.
+  Пользователь получил одно SMS,
+  а не push + SMS одновременно.
+end note
+
+@enduml

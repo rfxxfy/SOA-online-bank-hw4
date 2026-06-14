@@ -1,0 +1,35 @@
+@startuml variant_b_seq_failover
+title Variant B — Failover (push fail → SMS success)
+autonumber
+
+participant "Notification Gateway" as GW
+queue "Kafka" as K
+participant "Push Worker" as PW
+participant "Delivery Coordinator" as CO
+participant "Redis Lock" as RL
+participant "SMS Worker" as SW
+participant "SMS Gateway" as SMS
+database "PostgreSQL" as DB
+
+GW -> K : delivery.requested
+K -> PW : consume
+PW -> K : channel.push.failed {delivery_id, reason=timeout}
+K -> CO : consume failed event
+CO -> RL : SETNX lock:delivery_id TTL 30s
+RL --> CO : OK
+CO -> DB : SELECT projection\n(status != DELIVERED?)
+CO -> K : sms.requested {delivery_id}
+K -> SW : consume
+SW -> SMS : SendSMS()
+SMS --> SW : 200 OK
+SW -> K : channel.sms.delivered
+K -> CO : consume
+CO -> DB : UPDATE status=DELIVERED
+CO -> RL : DEL lock:delivery_id
+note over CO
+  Race risk: push.delivered и push.failed
+  могут прийти out-of-order →
+  нужен version vector / lock.
+end note
+
+@enduml

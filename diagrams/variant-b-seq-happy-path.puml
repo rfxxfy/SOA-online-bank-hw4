@@ -1,0 +1,22 @@
+@startuml variant_b_seq_happy
+title Variant B — Happy Path (push delivered)
+autonumber
+
+participant "Notification Gateway" as GW
+queue "Kafka" as K
+participant "Push Worker" as PW
+participant "FCM/APNs" as FCM
+participant "Delivery Coordinator" as CO
+database "PostgreSQL" as DB
+
+GW -> K : delivery.requested {event_id, user_id}
+K -> PW : consume
+PW -> FCM : SendPush()
+FCM --> PW : 200 OK
+PW -> K : channel.push.delivered {delivery_id}
+K -> CO : consume delivered event
+CO -> DB : UPDATE projection status=DELIVERED
+CO -> CO : Suppress sms/email commands
+note over CO : Email и SMS не публикуются
+
+@enduml

@@ -1,0 +1,36 @@
+@startuml variant_b_c4_container
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Variant B — Event-driven Choreography (C4 Container)
+
+Person(user, "Пользователь банка")
+
+System_Boundary(np, "Notification Platform — Choreography") {
+    Container(gateway, "Notification Gateway", "Go", "Ingress, validation")
+    Container(coordinator, "Delivery Coordinator", "Go", "Rules engine, escalation decisions")
+    ContainerQueue(events, "Event Log", "Apache Kafka", "delivery.*, channel.* topics")
+    Container(push_w, "Push Worker", "Go", "push.requested consumer")
+    Container(sms_w, "SMS Worker", "Go", "sms.requested consumer")
+    Container(email_w, "Email Worker", "Go", "email.requested consumer")
+    ContainerDb(projection, "Delivery Read Model", "PostgreSQL", "Materialized delivery state")
+    ContainerDb(locks, "Dedup Locks", "Redis", "delivery_id lock during escalation")
+    Container(obs, "Observability", "OTel", "Traces, metrics")
+}
+
+System_Ext(payment, "Payment Service")
+System_Ext(providers, "External Providers", "FCM, SMS, Email")
+
+Rel(payment, gateway, "NotificationRequested")
+Rel(gateway, events, "delivery.requested")
+Rel(events, push_w, "push.requested")
+Rel(push_w, providers, "Send push")
+Rel(push_w, events, "channel.push.failed | channel.push.delivered")
+Rel(events, coordinator, "All channel events")
+Rel(coordinator, locks, "Acquire escalation lock")
+Rel(coordinator, events, "sms.requested | email.requested")
+Rel(events, sms_w, "sms.requested")
+Rel(events, email_w, "email.requested")
+Rel(coordinator, projection, "Update read model")
+Rel(user, providers, "Receives notification")
+
+@enduml
